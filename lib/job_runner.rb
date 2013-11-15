@@ -23,6 +23,7 @@ module Jobbable
   def before_run(); end
   def run_job(); end
   def after_run(s_result=nil); end
+  def error_raised(); end
   
 end
 
@@ -34,11 +35,16 @@ module BasicJobbable
   attr_accessor :work_dir
 
   def run_job()
-    s_result = ""
-    Dir.chdir(@work_dir) do 
-      s_result = %x{#{@exec_cmd}}
-    end  
-    return s_result
+    
+    begin 
+      s_result = ""
+      Dir.chdir(@work_dir) do 
+        s_result = %x{#{@exec_cmd}}
+      end  
+      return s_result
+    rescue Exception => o_exc
+      error_raised(o_exc) # TODO: think about it more. should it stop all other jobs?
+    end
   end
  
 end
@@ -48,8 +54,12 @@ module SerialJobbable
   include Jobbable
   
   def run_job()
-    @node.children do |o_child_node|
-      o_child_node.content.run()
+    begin
+      @node.children do |o_child_node|
+        o_child_node.content.run()
+      end
+    rescue Exception => o_exc
+      error_raised(o_exc)
     end
   end
 end
@@ -63,16 +73,24 @@ module ParallelJobbable
     o_signal = CountDownLatch.new(@node.children.length)
     o_executor = Executors.new_fixed_thread_pool(@node.children.length)
     
-    @node.children do |o_child_node|
-      o_job = o_child_node.content
-      o_job.signal = o_signal
-      o_executor.execute(o_job)
-    end
+    begin 
     
-    # initiates an orderly shutdown in which previously submitted tasks are executed, 
-    # but no new tasks will be accepted.
-    o_executor.shutdown()
-    o_signal.await()
+      @node.children do |o_child_node|
+        o_job = o_child_node.content
+        o_job.signal = o_signal
+        o_executor.execute(o_job)
+      end
+      
+      # initiates an orderly shutdown in which previously submitted tasks are executed, 
+      # but no new tasks will be accepted.
+      o_executor.shutdown()
+      o_signal.await()
+      
+    rescue Exception => o_exc
+      error_raised(o_exc)
+    ensure
+      o_executor.shutdown()
+    end
 
   end
   
